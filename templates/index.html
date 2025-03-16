@@ -304,7 +304,9 @@
                     parent: null,
                     level: 0,
                     angle: 0,
-                    distance: isDirectory ? 100 : 60,
+                    distance: isDirectory ? 
+                        (action.path.split('/').length === 1 ? 60 : 100) : // Root directories are closer
+                        60,
                     isDirectory,
                     // Physics properties
                     velocity: { x: 0, y: 0 },
