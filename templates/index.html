@@ -1,55 +1,586 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>{{.Org}}/{{.Name}}</title>
+    <title>Tree-it: {{.Org}}/{{.Name}}</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pixi.js/7.3.2/pixi.min.js"></script>
     <style>
         body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 20px;
+            margin: 0;
+            overflow: hidden;
+            background: #000;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
         }
-        pre {
-            background: #f5f5f5;
-            padding: 15px;
-            border-radius: 5px;
-            overflow-x: auto;
+        #canvas-container {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            cursor: grab;
+        }
+        #canvas-container:active {
+            cursor: grabbing;
+        }
+        #controls {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0, 0, 0, 0.7);
+            padding: 10px 20px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            z-index: 1000;
+        }
+        #time-slider {
+            width: 400px;
+        }
+        #timestamp {
+            color: white;
+            font-size: 14px;
+            min-width: 100px;
         }
         .error {
-            color: #dc3545;
-            padding: 10px;
-            background: #f8d7da;
-            border-radius: 5px;
-            margin: 10px 0;
-        }
-        .status {
-            font-weight: bold;
-            margin: 10px 0;
+            position: fixed;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(220, 53, 69, 0.9);
+            color: white;
+            padding: 10px 20px;
+            border-radius: 6px;
+            display: none;
+            z-index: 1000;
         }
     </style>
 </head>
 <body>
-    <h1>Processing {{.Org}}/{{.Name}}</h1>
-    <p class="status">Status: <span id="status">connecting...</span></p>
-    <p id="error" class="error" style="display: none;"></p>
-    <pre id="data"></pre>
+    <div id="canvas-container"></div>
+    <div id="controls">
+        <input type="range" id="time-slider" min="0" max="100" value="0" step="1">
+        <div id="timestamp"></div>
+    </div>
+    <div id="error" class="error"></div>
 
     <script>
-        const ws = new WebSocket('ws://' + window.location.host + '/ws/{{.RepoKey}}');
-        ws.onmessage = function(event) {
-            const data = JSON.parse(event.data);
-            console.log(data);
-            document.getElementById('status').textContent = data.status;
-            if (data.data) {
-                document.getElementById('data').textContent = JSON.stringify(data.data, null, 2);
+        let app;
+        async function initPixi() {
+            app = new PIXI.Application({
+                width: window.innerWidth,
+                height: window.innerHeight,
+                backgroundColor: 0x000000,
+                antialias: true,
+                resolution: window.devicePixelRatio || 1
+            });
+            
+            document.getElementById('canvas-container').appendChild(app.view);
+
+            // Create main camera container
+            const camera = new PIXI.Container();
+            app.stage.addChild(camera);
+
+            // Create containers for visualization
+            const linesContainer = new PIXI.Container();
+            const nodesContainer = new PIXI.Container();
+            camera.addChild(linesContainer);
+            camera.addChild(nodesContainer);
+
+            // Add a center marker for debugging
+            const center = new PIXI.Graphics();
+            center.beginFill(0xFF0000);
+            center.drawCircle(0, 0, 5);
+            center.endFill();
+            center.position.set(app.screen.width / 2, app.screen.height / 2);
+            camera.addChild(center);
+
+            // Camera control state
+            const cameraState = {
+                isDragging: false,
+                lastPosition: null,
+                zoom: 1,
+                targetX: app.screen.width / 2,
+                targetY: app.screen.height / 2
+            };
+
+            // Mouse/Touch interaction setup
+            app.view.addEventListener('mousedown', startDrag);
+            app.view.addEventListener('touchstart', startDrag);
+            app.view.addEventListener('mouseup', endDrag);
+            app.view.addEventListener('touchend', endDrag);
+            app.view.addEventListener('mousemove', onDrag);
+            app.view.addEventListener('touchmove', onDrag);
+            app.view.addEventListener('wheel', onWheel);
+            window.addEventListener('keydown', onKeyPress);
+
+            function startDrag(event) {
+                cameraState.isDragging = true;
+                cameraState.lastPosition = event.type.includes('mouse') 
+                    ? { x: event.clientX, y: event.clientY }
+                    : { x: event.touches[0].clientX, y: event.touches[0].clientY };
             }
-            if (data.error) {
-                document.getElementById('error').style.display = 'block';
-                document.getElementById('error').textContent = data.error;
-            } else {
-                document.getElementById('error').style.display = 'none';
+
+            function endDrag() {
+                cameraState.isDragging = false;
             }
-        };
+
+            function onDrag(event) {
+                if (!cameraState.isDragging) return;
+
+                event.preventDefault();
+                
+                const currentPosition = event.type.includes('mouse')
+                    ? { x: event.clientX, y: event.clientY }
+                    : { x: event.touches[0].clientX, y: event.touches[0].clientY };
+
+                const dx = (currentPosition.x - cameraState.lastPosition.x) / cameraState.zoom;
+                const dy = (currentPosition.y - cameraState.lastPosition.y) / cameraState.zoom;
+
+                camera.position.x += dx;
+                camera.position.y += dy;
+
+                cameraState.lastPosition = currentPosition;
+            }
+
+            function centerOnRoot(animate = true) {
+                const targetX = app.screen.width / 2;
+                const targetY = app.screen.height / 2;
+                
+                if (animate) {
+                    // Smoothly animate to center
+                    const dx = targetX - camera.position.x;
+                    const dy = targetY - camera.position.y;
+                    const distance = Math.sqrt(dx * dx + dy * dy);
+                    
+                    if (distance > 1) {
+                        camera.position.x += dx * 0.1;
+                        camera.position.y += dy * 0.1;
+                        requestAnimationFrame(() => centerOnRoot(true));
+                    }
+                } else {
+                    // Instantly center
+                    camera.position.set(targetX, targetY);
+                }
+                
+                // Reset zoom
+                camera.scale.set(1);
+                cameraState.zoom = 1;
+            }
+
+            function onKeyPress(event) {
+                if (event.key === 'Enter') {
+                    centerOnRoot();
+                }
+            }
+
+            function onWheel(event) {
+                event.preventDefault();
+                
+                const direction = event.deltaY < 0 ? 1 : -1;
+                const factor = 0.1;
+                const zoom = cameraState.zoom * (1 + factor * direction);
+                
+                // Limit zoom range
+                if (zoom < 0.1 || zoom > 5) return;
+
+                // Get mouse position in world space
+                const mouseX = event.clientX;
+                const mouseY = event.clientY;
+                
+                // Get the world position before zoom
+                const worldPos = {
+                    x: (mouseX - camera.position.x) / camera.scale.x,
+                    y: (mouseY - camera.position.y) / camera.scale.y
+                };
+                
+                // Set new zoom
+                camera.scale.set(zoom);
+                cameraState.zoom = zoom;
+                
+                // Get the new screen position
+                const newScreenPos = {
+                    x: worldPos.x * camera.scale.x + camera.position.x,
+                    y: worldPos.y * camera.scale.y + camera.position.y
+                };
+                
+                // Move the camera to keep the mouse position fixed
+                camera.position.x -= (newScreenPos.x - mouseX);
+                camera.position.y -= (newScreenPos.y - mouseY);
+            }
+
+            // Core visualization state
+            const state = {
+                nodes: new Map(),
+                lines: new Map(),
+                firstCommit: 0,
+                lastCommit: 0,
+                currentTime: 0,
+                rootNode: null,
+                virtualRoot: null // Add virtual root for better organization
+            };
+
+            const ws = new WebSocket('ws://' + window.location.host + '/ws/{{.RepoKey}}');
+            
+            ws.onmessage = function(event) {
+                const data = JSON.parse(event.data);
+                console.log('Received data:', data);
+                
+                if (data.error) {
+                    const errorEl = document.getElementById('error');
+                    errorEl.style.display = 'block';
+                    errorEl.textContent = data.error;
+                    return;
+                }
+
+                if (data.data) {
+                    initializeVisualization(data.data);
+                }
+            };
+
+            function initializeVisualization(data) {
+                console.log('Initializing with data:', data);
+                
+                // Set up time range
+                state.firstCommit = data.metadata.firstCommitDate;
+                state.lastCommit = data.metadata.lastCommitDate;
+                state.currentTime = state.firstCommit;
+
+                // Configure time slider
+                const slider = document.getElementById('time-slider');
+                slider.min = state.firstCommit;
+                slider.max = state.lastCommit;
+                slider.value = state.firstCommit;
+
+                console.log(`Time range: ${state.firstCommit} to ${state.lastCommit}`);
+
+                // Create virtual root
+                state.virtualRoot = {
+                    children: [],
+                    angle: 0,
+                    level: 0
+                };
+
+                // Process file actions into node structure
+                processFileActions(data.fileActions);
+
+                // Layout the tree
+                layoutTree();
+
+                // Start animation
+                app.ticker.add(animate);
+
+                // Add slider event listener
+                slider.addEventListener('input', () => {
+                    state.currentTime = Number(slider.value);
+                });
+            }
+
+            function createNode(action, isDirectory = false) {
+                const sprite = new PIXI.Graphics();
+                
+                if (isDirectory) {
+                    sprite.beginFill(0xFFFF00);
+                    sprite.drawCircle(0, 0, 8);
+                    sprite.endFill();
+                    sprite.lineStyle(2, 0xFFAA00);
+                    sprite.drawCircle(0, 0, 10);
+                } else {
+                    sprite.beginFill(0xFFFFFF);
+                    sprite.drawCircle(0, 0, 4);
+                    sprite.endFill();
+                    sprite.lineStyle(1, 0x00FF00);
+                    sprite.drawCircle(0, 0, 6);
+                }
+                
+                sprite.alpha = 0;
+                sprite.position.set(app.screen.width / 2, app.screen.height / 2);
+
+                return {
+                    sprite,
+                    path: action.path,
+                    timestamp: action.timestamp || 0,
+                    children: [],
+                    parent: null,
+                    level: 0,
+                    angle: 0,
+                    distance: isDirectory ? 100 : 60,
+                    isDirectory,
+                    // Physics properties
+                    velocity: { x: 0, y: 0 },
+                    force: { x: 0, y: 0 }
+                };
+            }
+
+            function createLine() {
+                const line = new PIXI.Graphics();
+                line.alpha = 0.5; // More visible lines
+                linesContainer.addChild(line);
+                return line;
+            }
+
+            function updateLine(line, startX, startY, endX, endY) {
+                line.clear();
+                line.lineStyle(2, 0xFFFFFF, 0.5); // Thicker, more visible lines
+                line.moveTo(startX, startY);
+                line.lineTo(endX, endY);
+            }
+
+            function processFileActions(actions) {
+                console.log(`Processing ${actions.length} file actions`);
+                
+                // First, create a set of all directories
+                const directories = new Set();
+                actions.forEach(action => {
+                    const parts = action.path.split('/');
+                    let path = '';
+                    for (let i = 0; i < parts.length - 1; i++) {
+                        path = path + (i > 0 ? '/' : '') + parts[i];
+                        if (path) directories.add(path);
+                    }
+                });
+
+                // Create directory nodes first
+                directories.forEach(dirPath => {
+                    if (!state.nodes.has(dirPath)) {
+                        const dirNode = createNode({ path: dirPath }, true);
+                        state.nodes.set(dirPath, dirNode);
+                        nodesContainer.addChild(dirNode.sprite);
+
+                        // Create line for directory
+                        const line = createLine();
+                        state.lines.set(dirPath, line);
+                    }
+                });
+
+                // Sort actions to process directories before files
+                const allPaths = [...directories, ...actions.map(a => a.path)];
+                allPaths.sort((a, b) => {
+                    const aDepth = a.split('/').length;
+                    const bDepth = b.split('/').length;
+                    if (aDepth === bDepth) {
+                        // If same depth, directories come first
+                        const aIsDir = directories.has(a);
+                        const bIsDir = directories.has(b);
+                        if (aIsDir !== bIsDir) return bIsDir ? 1 : -1;
+                        return a.localeCompare(b);
+                    }
+                    return aDepth - bDepth;
+                });
+
+                // Process all paths
+                allPaths.forEach(path => {
+                    if (!state.nodes.has(path) && !directories.has(path)) {
+                        // This is a file that hasn't been created yet
+                        const action = actions.find(a => a.path === path);
+                        if (!action) return;
+
+                        const node = createNode(action, false);
+                        state.nodes.set(path, node);
+                        nodesContainer.addChild(node.sprite);
+
+                        // Create line for file
+                        const line = createLine();
+                        state.lines.set(path, line);
+                    }
+
+                    // Set up parent-child relationship
+                    const node = state.nodes.get(path);
+                    const parentPath = path.split('/').slice(0, -1).join('/');
+                    
+                    if (parentPath && state.nodes.has(parentPath)) {
+                        const parent = state.nodes.get(parentPath);
+                        node.parent = parent;
+                        parent.children.push(node);
+                        node.level = parent.level + 1;
+                    } else {
+                        node.parent = state.virtualRoot;
+                        state.virtualRoot.children.push(node);
+                        node.level = 1;
+                    }
+                });
+
+                console.log(`Created ${state.nodes.size} nodes (${directories.size} directories)`);
+            }
+
+            function layoutTree() {
+                // First, assign angles to all nodes
+                function assignAngles(node, startAngle, endAngle) {
+                    if (!node) return;
+
+                    node.angle = (startAngle + endAngle) / 2;
+
+                    if (node.children && node.children.length > 0) {
+                        const angleStep = (endAngle - startAngle) / node.children.length;
+                        node.children.forEach((child, index) => {
+                            const childStartAngle = startAngle + index * angleStep;
+                            assignAngles(child, childStartAngle, childStartAngle + angleStep);
+                        });
+                    }
+                }
+
+                // Assign angles starting from virtual root
+                assignAngles(state.virtualRoot, 0, Math.PI * 2);
+
+                // Position all nodes
+                function positionNode(node, parentX, parentY) {
+                    if (!node.sprite) return;
+
+                    const distance = node.level * node.distance;
+                    const x = parentX + Math.cos(node.angle) * distance;
+                    const y = parentY + Math.sin(node.angle) * distance;
+                    
+                    node.sprite.position.set(x, y);
+                    // Reset physics properties
+                    node.velocity = { x: 0, y: 0 };
+                    node.force = { x: 0, y: 0 };
+
+                    if (node.children) {
+                        node.children.forEach(child => {
+                            positionNode(child, x, y);
+                        });
+                    }
+                }
+
+                const centerX = app.screen.width / 2;
+                const centerY = app.screen.height / 2;
+                state.virtualRoot.children.forEach(child => {
+                    positionNode(child, centerX, centerY);
+                });
+            }
+
+            // Physics simulation parameters
+            const REPULSION_STRENGTH = 5000;
+            const SPRING_STRENGTH = 0.8; // Increased for more stability
+            const DAMPING = 0.7; // Increased damping to reduce oscillation
+            const MIN_DISTANCE = 150;
+            const TIME_STEP = 1/3;
+
+            function updatePhysics() {
+                const visibleNodes = Array.from(state.nodes.values())
+                    .filter(node => node.sprite.alpha > 0);
+
+                // Calculate repulsion forces
+                for (let i = 0; i < visibleNodes.length; i++) {
+                    const nodeA = visibleNodes[i];
+                    for (let j = i + 1; j < visibleNodes.length; j++) {
+                        const nodeB = visibleNodes[j];
+                        
+                        // Skip if nodes are parent-child or from different levels
+                        if (nodeA.parent === nodeB || nodeB.parent === nodeA ||
+                            Math.abs(nodeA.level - nodeB.level) > 1) continue;
+
+                        const dx = nodeB.sprite.x - nodeA.sprite.x;
+                        const dy = nodeB.sprite.y - nodeA.sprite.y;
+                        const distSq = dx * dx + dy * dy;
+                        const dist = Math.sqrt(distSq);
+                        
+                        // Apply repulsion with a smoother falloff
+                        const force = REPULSION_STRENGTH / (dist * dist + 1);
+                        const fx = (dx / dist) * force;
+                        const fy = (dy / dist) * force;
+
+                        // Scale force based on node types
+                        const scaleFactor = (nodeA.isDirectory && nodeB.isDirectory) ? 2 : 1;
+                        
+                        nodeA.force.x -= fx * scaleFactor;
+                        nodeA.force.y -= fy * scaleFactor;
+                        nodeB.force.x += fx * scaleFactor;
+                        nodeB.force.y += fy * scaleFactor;
+                    }
+                }
+
+                // Apply spring forces and update positions
+                visibleNodes.forEach(node => {
+                    if (node.parent && node.parent !== state.virtualRoot) {
+                        const dx = node.sprite.x - node.parent.sprite.x;
+                        const dy = node.sprite.y - node.parent.sprite.y;
+                        const dist = Math.sqrt(dx * dx + dy * dy);
+                        const targetDist = node.distance * (node.isDirectory ? 1.5 : 1);
+                        
+                        const springForce = (dist - targetDist) * SPRING_STRENGTH;
+                        node.force.x -= (dx / dist) * springForce;
+                        node.force.y -= (dy / dist) * springForce;
+
+                        // Only apply rotation force if nodes are too close together
+                        if (dist < targetDist * 1.2) {
+                            const rotationForce = node.isDirectory ? 2 : 1; // Reduced rotation force
+                            const angle = Math.atan2(dy, dx);
+                            // Apply rotation force perpendicular to the spring direction
+                            node.force.x += Math.cos(angle + Math.PI/2) * rotationForce;
+                            node.force.y += Math.sin(angle + Math.PI/2) * rotationForce;
+                        }
+                    }
+
+                    // Update velocity with increased responsiveness
+                    node.velocity.x = (node.velocity.x + node.force.x * TIME_STEP) * DAMPING;
+                    node.velocity.y = (node.velocity.y + node.force.y * TIME_STEP) * DAMPING;
+
+                    // Add velocity limits to prevent extreme movement
+                    const maxVelocity = 500; // Reduced max velocity
+                    const velocityMagnitude = Math.sqrt(node.velocity.x * node.velocity.x + node.velocity.y * node.velocity.y);
+                    if (velocityMagnitude > maxVelocity) {
+                        node.velocity.x = (node.velocity.x / velocityMagnitude) * maxVelocity;
+                        node.velocity.y = (node.velocity.y / velocityMagnitude) * maxVelocity;
+                    }
+
+                    // Update position
+                    node.sprite.x += node.velocity.x * TIME_STEP;
+                    node.sprite.y += node.velocity.y * TIME_STEP;
+
+                    // Reset forces
+                    node.force.x = 0;
+                    node.force.y = 0;
+                });
+            }
+
+            function animate() {
+                const currentTime = state.currentTime;
+                document.getElementById('timestamp').textContent = new Date(currentTime * 1000).toLocaleDateString();
+
+                // Update physics before rendering
+                updatePhysics();
+
+                state.nodes.forEach((node, path) => {
+                    if (node.isDirectory || node.timestamp <= currentTime) {
+                        if (node.sprite.alpha === 0) {
+                            console.log(`Showing node: ${path}${node.isDirectory ? ' (directory)' : ''}`);
+                            node.sprite.alpha = 1;
+                        }
+
+                        // Update line to follow physics-based positions
+                        const line = state.lines.get(path);
+                        if (line) {
+                            const startX = node.parent === state.virtualRoot ? 
+                                app.screen.width / 2 : node.parent.sprite.x;
+                            const startY = node.parent === state.virtualRoot ? 
+                                app.screen.height / 2 : node.parent.sprite.y;
+                            
+                            updateLine(line, startX, startY, node.sprite.x, node.sprite.y);
+                            line.alpha = node.isDirectory ? 0.7 : 0.4;
+                        }
+                    } else {
+                        node.sprite.alpha = 0;
+                        const line = state.lines.get(path);
+                        if (line) {
+                            line.alpha = 0;
+                        }
+                    }
+                });
+            }
+
+            // Modify window resize handler
+            window.addEventListener('resize', () => {
+                app.renderer.resize(window.innerWidth, window.innerHeight);
+                layoutTree(); // Recalculate layout on resize
+            });
+
+            // Return camera for use in other functions
+            return camera;
+        }
+
+        // Start the application
+        window.onload = initPixi;
     </script>
 </body>
 </html> 
