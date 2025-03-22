@@ -122,6 +122,9 @@ func main() {
 	r.Use(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			log.Printf("Request: %s %s", r.Method, r.URL.Path)
+			if r.Header.Get("Upgrade") == "websocket" {
+				log.Printf("WebSocket connection attempt: %s", r.URL.Path)
+			}
 			next.ServeHTTP(w, r)
 		})
 	})
@@ -163,6 +166,7 @@ func main() {
 	// WebSocket handler
 	r.HandleFunc("/ws/{path:.*}", func(w http.ResponseWriter, r *http.Request) {
 		repoKey := mux.Vars(r)["path"]
+		log.Printf("Processing WebSocket connection for repo: %s", repoKey)
 		process := pm.GetOrCreateProcess(repoKey)
 
 		conn, err := upgrader.Upgrade(w, r, nil)
@@ -178,28 +182,33 @@ func main() {
 		// Start processing if this is the first subscriber
 		if len(process.Subscribers) == 1 {
 			go func() {
+				log.Printf("Starting clone process for repo: %s", repoKey)
 				process.Status = StatusCloning
 				process.BroadcastStatus()
 
 				repoURL := fmt.Sprintf("https://github.com/%s", repoKey[7:]) // Remove "github/" prefix
 				repo, err := git.GetOrCloneRepo(repoURL)
 				if err != nil {
+					log.Printf("Clone error for repo %s: %v", repoKey, err)
 					process.Status = StatusError
 					process.Error = err
 					process.BroadcastStatus()
 					return
 				}
+				log.Printf("Successfully cloned repo: %s", repoKey)
 
 				process.Status = StatusProcessing
 				process.BroadcastStatus()
 
 				data, err := git.ProcessRepo(repo, repoURL)
 				if err != nil {
+					log.Printf("Processing error for repo %s: %v", repoKey, err)
 					process.Status = StatusError
 					process.Error = err
 					process.BroadcastStatus()
 					return
 				}
+				log.Printf("Successfully processed repo: %s", repoKey)
 
 				process.Status = StatusComplete
 				process.Data = &data
