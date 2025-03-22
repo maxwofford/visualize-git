@@ -92,17 +92,20 @@
             center.beginFill(0xFF0000);
             center.drawCircle(0, 0, 5);
             center.endFill();
-            center.position.set(app.screen.width / 2, app.screen.height / 2);
+            center.position.set(0, 0); // Set to origin instead of screen center
             camera.addChild(center);
 
             // Camera control state
             const cameraState = {
                 isDragging: false,
                 lastPosition: null,
-                zoom: 1,
-                targetX: app.screen.width / 2,
-                targetY: app.screen.height / 2
+                zoom: 1
             };
+
+            // Initialize camera position to center of screen
+            camera.position.set(app.screen.width / 2, app.screen.height / 2);
+            nodesContainer.position.set(app.screen.width / 2, app.screen.height / 2);
+            linesContainer.position.set(app.screen.width / 2, app.screen.height / 2);
 
             // Mouse/Touch interaction setup
             app.view.addEventListener('mousedown', startDrag);
@@ -144,28 +147,45 @@
             }
 
             function centerOnRoot(animate = true) {
-                const targetX = app.screen.width / 2;
-                const targetY = app.screen.height / 2;
-                
+                console.log('Centering root...');
+                console.log('Initial camera position:', { x: camera.position.x, y: camera.position.y });
+                console.log('Initial container positions:', {
+                    nodes: { x: nodesContainer.position.x, y: nodesContainer.position.y },
+                    lines: { x: linesContainer.position.x, y: linesContainer.position.y }
+                });
+
                 if (animate) {
                     // Smoothly animate to center
-                    const dx = targetX - camera.position.x;
-                    const dy = targetY - camera.position.y;
+                    const dx = -camera.position.x;
+                    const dy = -camera.position.y;
                     const distance = Math.sqrt(dx * dx + dy * dy);
+                    
+                    console.log('Animation distance:', distance);
                     
                     if (distance > 1) {
                         camera.position.x += dx * 0.1;
                         camera.position.y += dy * 0.1;
+                        console.log('New camera position:', { x: camera.position.x, y: camera.position.y });
                         requestAnimationFrame(() => centerOnRoot(true));
                     }
                 } else {
                     // Instantly center
-                    camera.position.set(targetX, targetY);
+                    camera.position.set(0, 0);
+                    console.log('Instant center - camera position:', { x: camera.position.x, y: camera.position.y });
                 }
-                
+
                 // Reset zoom
                 camera.scale.set(1);
                 cameraState.zoom = 1;
+                
+                // Reset container positions to origin since they're children of the camera
+                nodesContainer.position.set(0, 0);
+                linesContainer.position.set(0, 0);
+                
+                console.log('Final container positions:', {
+                    nodes: { x: nodesContainer.position.x, y: nodesContainer.position.y },
+                    lines: { x: linesContainer.position.x, y: linesContainer.position.y }
+                });
             }
 
             function onKeyPress(event) {
@@ -267,6 +287,9 @@
                 // Layout the tree
                 layoutTree();
 
+                // Center the camera
+                centerOnRoot(false);
+
                 // Start animation
                 app.ticker.add(animate);
 
@@ -294,7 +317,7 @@
                 }
                 
                 sprite.alpha = 0;
-                sprite.position.set(app.screen.width / 2, app.screen.height / 2);
+                sprite.position.set(0, 0); // Initialize at origin instead of screen center
 
                 return {
                     sprite,
@@ -305,12 +328,12 @@
                     level: 0,
                     angle: 0,
                     distance: isDirectory ? 
-                        (action.path.split('/').length === 1 ? 60 : 100) : // Root directories are closer
+                        (action.path.split('/').length === 1 ? 60 : 100) : 
                         60,
                     isDirectory,
-                    // Physics properties
                     velocity: { x: 0, y: 0 },
-                    force: { x: 0, y: 0 }
+                    force: { x: 0, y: 0 },
+                    isAtRest: false
                 };
             }
 
@@ -331,21 +354,29 @@
             function processFileActions(actions) {
                 console.log(`Processing ${actions.length} file actions`);
                 
-                // First, create a set of all directories
-                const directories = new Set();
+                // First, create a set of all directories and track their earliest timestamp
+                const directories = new Map(); // Changed to Map to store timestamps
                 actions.forEach(action => {
                     const parts = action.path.split('/');
                     let path = '';
                     for (let i = 0; i < parts.length - 1; i++) {
                         path = path + (i > 0 ? '/' : '') + parts[i];
-                        if (path) directories.add(path);
+                        if (path) {
+                            const currentTimestamp = directories.get(path);
+                            if (!currentTimestamp || action.timestamp < currentTimestamp) {
+                                directories.set(path, action.timestamp);
+                            }
+                        }
                     }
                 });
 
                 // Create directory nodes first
-                directories.forEach(dirPath => {
+                directories.forEach((timestamp, dirPath) => {
                     if (!state.nodes.has(dirPath)) {
-                        const dirNode = createNode({ path: dirPath }, true);
+                        const dirNode = createNode({ 
+                            path: dirPath, 
+                            timestamp: timestamp // Set directory timestamp to earliest child
+                        }, true);
                         state.nodes.set(dirPath, dirNode);
                         nodesContainer.addChild(dirNode.sprite);
 
@@ -356,7 +387,7 @@
                 });
 
                 // Sort actions to process directories before files
-                const allPaths = [...directories, ...actions.map(a => a.path)];
+                const allPaths = [...directories.keys(), ...actions.map(a => a.path)];
                 allPaths.sort((a, b) => {
                     const aDepth = a.split('/').length;
                     const bDepth = b.split('/').length;
@@ -424,11 +455,21 @@
                 // Assign angles starting from virtual root
                 assignAngles(state.virtualRoot, 0, Math.PI * 2);
 
-                // Position all nodes
+                // Position all nodes relative to center
                 function positionNode(node, parentX, parentY) {
                     if (!node.sprite) return;
 
-                    const distance = node.level * node.distance;
+                    // Adjust distance based on level and directory status
+                    let levelMultiplier;
+                    if (node.level === 1) {
+                        levelMultiplier = 0.6; // Root level nodes are closer
+                    } else if (node.isDirectory) {
+                        levelMultiplier = 1;
+                    } else {
+                        levelMultiplier = 0.8; // Files are slightly closer than their parent directories
+                    }
+
+                    const distance = node.level * node.distance * levelMultiplier;
                     const x = parentX + Math.cos(node.angle) * distance;
                     const y = parentY + Math.sin(node.angle) * distance;
                     
@@ -444,82 +485,143 @@
                     }
                 }
 
-                const centerX = app.screen.width / 2;
-                const centerY = app.screen.height / 2;
+                // Position nodes relative to center of screen
+                const centerX = 0;
+                const centerY = 0;
                 state.virtualRoot.children.forEach(child => {
                     positionNode(child, centerX, centerY);
                 });
             }
 
             // Physics simulation parameters
-            const REPULSION_STRENGTH = 5000;
-            const SPRING_STRENGTH = 0.8; // Increased for more stability
-            const DAMPING = 0.7; // Increased damping to reduce oscillation
-            const MIN_DISTANCE = 150;
+            const REPULSION_STRENGTH = 3000; // Increased from 1000 to prevent tangling
+            const SPRING_STRENGTH = 0.3; // Increased from 0.2 for better structure
+            const DAMPING = 0.85; // Reduced from 0.95 to allow more movement
+            const MIN_DISTANCE = 200; // Increased from 150 for more spacing
             const TIME_STEP = 1/3;
+            const MIN_SPEED = 0.5; // Reduced from 1.0
+            const EXTRA_FRICTION = 0.5; // Increased from 0.3
+            const REST_THRESHOLD = 0.05; // Reduced from 0.1
+            const WAKE_THRESHOLD = 2.0; // Reduced from 5.0 to wake more easily
 
             function updatePhysics() {
                 const visibleNodes = Array.from(state.nodes.values())
                     .filter(node => node.sprite.alpha > 0);
 
-                // Calculate repulsion forces
-                for (let i = 0; i < visibleNodes.length; i++) {
-                    const nodeA = visibleNodes[i];
-                    for (let j = i + 1; j < visibleNodes.length; j++) {
-                        const nodeB = visibleNodes[j];
-                        
-                        // Skip if nodes are parent-child or from different levels
-                        if (nodeA.parent === nodeB || nodeB.parent === nodeA ||
-                            Math.abs(nodeA.level - nodeB.level) > 1) continue;
+                const centerX = app.screen.width / 2;
+                const centerY = app.screen.height / 2;
 
-                        const dx = nodeB.sprite.x - nodeA.sprite.x;
-                        const dy = nodeB.sprite.y - nodeA.sprite.y;
+                // Reset forces for all nodes
+                visibleNodes.forEach(node => {
+                    node.force = { x: 0, y: 0 };
+                    // Initialize rest state if not set
+                    node.isAtRest = node.isAtRest || false;
+                });
+
+                // Calculate all forces first
+                visibleNodes.forEach(node => {
+                    if (node.isAtRest) return;
+
+                    // Root level repulsion
+                    if (node.parent === state.virtualRoot) {
+                        const dx = node.sprite.x;
+                        const dy = node.sprite.y;
                         const distSq = dx * dx + dy * dy;
                         const dist = Math.sqrt(distSq);
                         
-                        // Apply repulsion with a smoother falloff
-                        const force = REPULSION_STRENGTH / (dist * dist + 1);
+                        if (dist < MIN_DISTANCE) {
+                            const force = REPULSION_STRENGTH / (dist + 1);
+                            const fx = (dx / dist) * force;
+                            const fy = (dy / dist) * force;
+                            
+                            node.force.x += fx * 0.4;
+                            node.force.y += fy * 0.4;
+                        }
+                    }
+
+                    // Node-to-node repulsion
+                    visibleNodes.forEach(otherNode => {
+                        if (node === otherNode || node.isAtRest || otherNode.isAtRest) return;
+                        if (node.parent === otherNode || otherNode.parent === node) return;
+                        
+                        // Allow repulsion between nodes up to 2 levels apart
+                        if (Math.abs(node.level - otherNode.level) > 2) return;
+
+                        const dx = otherNode.sprite.x - node.sprite.x;
+                        const dy = otherNode.sprite.y - node.sprite.y;
+                        const distSq = dx * dx + dy * dy;
+                        const dist = Math.sqrt(distSq);
+                        
+                        // Stronger repulsion at close range
+                        const force = REPULSION_STRENGTH / (dist + 1);
                         const fx = (dx / dist) * force;
                         const fy = (dy / dist) * force;
 
-                        // Scale force based on node types
-                        const scaleFactor = (nodeA.isDirectory && nodeB.isDirectory) ? 2 : 1;
+                        // Stronger repulsion between directories
+                        const scaleFactor = (node.isDirectory && otherNode.isDirectory) ? 2.0 : 1.0;
                         
-                        nodeA.force.x -= fx * scaleFactor;
-                        nodeA.force.y -= fy * scaleFactor;
-                        nodeB.force.x += fx * scaleFactor;
-                        nodeB.force.y += fy * scaleFactor;
-                    }
-                }
+                        node.force.x -= fx * scaleFactor;
+                        node.force.y -= fy * scaleFactor;
+                    });
 
-                // Apply spring forces and update positions
-                visibleNodes.forEach(node => {
+                    // Spring forces
                     if (node.parent && node.parent !== state.virtualRoot) {
                         const dx = node.sprite.x - node.parent.sprite.x;
                         const dy = node.sprite.y - node.parent.sprite.y;
                         const dist = Math.sqrt(dx * dx + dy * dy);
-                        const targetDist = node.distance * (node.isDirectory ? 1.5 : 1);
+                        const targetDist = node.distance * (node.isDirectory ? 2.0 : 1.2); // Increased spacing
                         
                         const springForce = (dist - targetDist) * SPRING_STRENGTH;
                         node.force.x -= (dx / dist) * springForce;
                         node.force.y -= (dy / dist) * springForce;
 
-                        // Only apply rotation force if nodes are too close together
-                        if (dist < targetDist * 1.2) {
-                            const rotationForce = node.isDirectory ? 2 : 1; // Reduced rotation force
+                        // Only apply rotation force if nodes are too close
+                        if (dist < targetDist) {
+                            const rotationForce = node.isDirectory ? 0.3 : 0.15; // Increased rotation
                             const angle = Math.atan2(dy, dx);
-                            // Apply rotation force perpendicular to the spring direction
                             node.force.x += Math.cos(angle + Math.PI/2) * rotationForce;
                             node.force.y += Math.sin(angle + Math.PI/2) * rotationForce;
                         }
+                    } else if (node.parent === state.virtualRoot) {
+                        const dx = node.sprite.x - centerX;
+                        const dy = node.sprite.y - centerY;
+                        const dist = Math.sqrt(dx * dx + dy * dy);
+                        const targetDist = node.distance * 3; // Increased from 2
+                        
+                        if (dist > targetDist) {
+                            const springForce = (dist - targetDist) * SPRING_STRENGTH * 0.4; // Increased from 0.2
+                            node.force.x -= (dx / dist) * springForce;
+                            node.force.y -= (dy / dist) * springForce;
+                        }
                     }
+                });
 
-                    // Update velocity with increased responsiveness
+                // Update positions based on accumulated forces
+                visibleNodes.forEach(node => {
+                    if (node.isAtRest) return;
+
+                    // Calculate total force magnitude
+                    const forceMagnitude = Math.sqrt(node.force.x * node.force.x + node.force.y * node.force.y);
+
+                    // Update velocity
                     node.velocity.x = (node.velocity.x + node.force.x * TIME_STEP) * DAMPING;
                     node.velocity.y = (node.velocity.y + node.force.y * TIME_STEP) * DAMPING;
 
-                    // Add velocity limits to prevent extreme movement
-                    const maxVelocity = 500; // Reduced max velocity
+                    // Calculate speed
+                    const speed = Math.sqrt(node.velocity.x * node.velocity.x + node.velocity.y * node.velocity.y);
+
+                    // Rest state handling
+                    if (speed < REST_THRESHOLD && forceMagnitude < WAKE_THRESHOLD) {
+                        node.isAtRest = true;
+                        node.velocity.x = 0;
+                        node.velocity.y = 0;
+                    } else if (speed < MIN_SPEED) {
+                        node.velocity.x *= EXTRA_FRICTION;
+                        node.velocity.y *= EXTRA_FRICTION;
+                    }
+
+                    // Velocity limits
+                    const maxVelocity = 200; // Reduced from 500
                     const velocityMagnitude = Math.sqrt(node.velocity.x * node.velocity.x + node.velocity.y * node.velocity.y);
                     if (velocityMagnitude > maxVelocity) {
                         node.velocity.x = (node.velocity.x / velocityMagnitude) * maxVelocity;
@@ -529,10 +631,27 @@
                     // Update position
                     node.sprite.x += node.velocity.x * TIME_STEP;
                     node.sprite.y += node.velocity.y * TIME_STEP;
+                });
 
-                    // Reset forces
-                    node.force.x = 0;
-                    node.force.y = 0;
+                // Wake up resting nodes only if strong forces are present
+                visibleNodes.forEach(node => {
+                    if (!node.isAtRest) return;
+                    
+                    // Calculate total force from neighbors
+                    let totalForce = 0;
+                    [...(node.children || []), node.parent]
+                        .filter(n => n && n !== state.virtualRoot)
+                        .forEach(neighbor => {
+                            if (!neighbor.isAtRest) {
+                                const dx = neighbor.sprite.x - node.sprite.x;
+                                const dy = neighbor.sprite.y - node.sprite.y;
+                                totalForce += Math.sqrt(dx * dx + dy * dy);
+                            }
+                        });
+                    
+                    if (totalForce > WAKE_THRESHOLD) {
+                        node.isAtRest = false;
+                    }
                 });
             }
 
@@ -544,22 +663,21 @@
                 updatePhysics();
 
                 state.nodes.forEach((node, path) => {
-                    if (node.isDirectory || node.timestamp <= currentTime) {
+                    // Show node if its timestamp is less than or equal to current time
+                    if (node.timestamp <= currentTime) {
                         if (node.sprite.alpha === 0) {
-                            console.log(`Showing node: ${path}${node.isDirectory ? ' (directory)' : ''}`);
+                            console.log(`Showing node: ${path}${node.isDirectory ? ' (directory)' : ''} at time ${node.timestamp}`);
                             node.sprite.alpha = 1;
                         }
 
                         // Update line to follow physics-based positions
                         const line = state.lines.get(path);
                         if (line) {
-                            const startX = node.parent === state.virtualRoot ? 
-                                app.screen.width / 2 : node.parent.sprite.x;
-                            const startY = node.parent === state.virtualRoot ? 
-                                app.screen.height / 2 : node.parent.sprite.y;
+                            const startX = node.parent === state.virtualRoot ? 0 : node.parent.sprite.x;
+                            const startY = node.parent === state.virtualRoot ? 0 : node.parent.sprite.y;
                             
                             updateLine(line, startX, startY, node.sprite.x, node.sprite.y);
-                            line.alpha = node.isDirectory ? 0.7 : 0.4;
+                            line.alpha = node.sprite.alpha * (node.isDirectory ? 0.7 : 0.4);
                         }
                     } else {
                         node.sprite.alpha = 0;
@@ -574,7 +692,12 @@
             // Modify window resize handler
             window.addEventListener('resize', () => {
                 app.renderer.resize(window.innerWidth, window.innerHeight);
-                layoutTree(); // Recalculate layout on resize
+                
+                // Update container positions on resize
+                nodesContainer.position.set(app.screen.width / 2, app.screen.height / 2);
+                linesContainer.position.set(app.screen.width / 2, app.screen.height / 2);
+                
+                layoutTree();
             });
 
             // Return camera for use in other functions
