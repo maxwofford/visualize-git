@@ -5,11 +5,14 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/go-git/go-git/v5"
 	"tree-it/utils"
+
+	"github.com/go-git/go-git/v5"
 )
 
 func GetOrCloneRepo(repoURL string) (*git.Repository, error) {
+	fmt.Println("Getting or cloning repo", repoURL)
+
 	cacheDir := "repos-cache"
 	err := os.MkdirAll(cacheDir, 0755)
 	if err != nil {
@@ -21,7 +24,7 @@ func GetOrCloneRepo(repoURL string) (*git.Repository, error) {
 
 	if _, err := os.Stat(repoCachePath); err == nil {
 		fmt.Printf("Found cached repo at %s, updating...\n", repoCachePath)
-		
+
 		repo, err := git.PlainOpen(repoCachePath)
 		if err != nil {
 			return nil, fmt.Errorf("failed to open cached repo: %v", err)
