@@ -34,6 +34,35 @@
             gap: 10px;
             z-index: 1000;
         }
+        #commit-log {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 15px;
+            border-radius: 8px;
+            max-width: 400px;
+            display: none;
+            z-index: 1000;
+        }
+        #commit-log .hash {
+            font-family: monospace;
+            color: #6ea8fe;
+            text-decoration: none;
+            font-size: 0.9em;
+        }
+        #commit-log .hash:hover {
+            text-decoration: underline;
+        }
+        #commit-log .message {
+            margin: 5px 0;
+            font-size: 0.95em;
+        }
+        #commit-log .author {
+            color: #adb5bd;
+            font-size: 0.9em;
+        }
         #time-slider {
             width: 400px;
         }
@@ -103,6 +132,11 @@
     <div id="status" class="queued">
         <div class="spinner"></div>
         <div class="message">Queued</div>
+    </div>
+    <div id="commit-log">
+        <a href="#" class="hash"></a>
+        <div class="message"></div>
+        <div class="author"></div>
     </div>
 
     <script>
@@ -278,7 +312,8 @@
                 lastCommit: 0,
                 currentTime: 0,
                 rootNode: null,
-                virtualRoot: null // Add virtual root for better organization
+                virtualRoot: null, // Add virtual root for better organization
+                fileActions: []
             };
 
             const ws = new WebSocket('ws://' + window.location.host + '/ws/{{.RepoKey}}');
@@ -355,6 +390,21 @@
 
                 // Process file actions into node structure
                 processFileActions(data.fileActions);
+
+                // Initialize commit log with first commit
+                const firstAction = data.fileActions[0];
+                if (firstAction) {
+                    const commitLog = document.getElementById('commit-log');
+                    const hashLink = commitLog.querySelector('.hash');
+                    const message = commitLog.querySelector('.message');
+                    const author = commitLog.querySelector('.author');
+
+                    hashLink.href = `https://github.com/{{.Org}}/{{.Name}}/commit/${firstAction.commitHash}`;
+                    hashLink.textContent = firstAction.commitHash.substring(0, 7);
+                    message.textContent = firstAction.commitMessage;
+                    author.textContent = `by ${firstAction.author}`;
+                    commitLog.style.display = 'block';
+                }
 
                 // Layout the tree
                 layoutTree();
@@ -506,6 +556,9 @@
                 });
 
                 console.log(`Created ${state.nodes.size} nodes (${directories.size} directories)`);
+
+                // Store file actions
+                state.fileActions = actions;
             }
 
             function layoutTree() {
@@ -733,6 +786,38 @@
 
                 // Update physics before rendering
                 updatePhysics();
+
+                // Find the most recent commit for the current time
+                let mostRecentCommit = null;
+                let mostRecentTime = 0;
+                state.nodes.forEach((node, path) => {
+                    if (node.timestamp <= currentTime && node.timestamp > mostRecentTime) {
+                        mostRecentTime = node.timestamp;
+                        mostRecentCommit = node;
+                    }
+                });
+
+                // Update commit log if we found a commit
+                if (mostRecentCommit) {
+                    const commitLog = document.getElementById('commit-log');
+                    const hashLink = commitLog.querySelector('.hash');
+                    const message = commitLog.querySelector('.message');
+                    const author = commitLog.querySelector('.author');
+
+                    // Find the corresponding file action to get commit info
+                    const fileAction = state.fileActions.find(action => 
+                        action.path === mostRecentCommit.path && 
+                        action.timestamp === mostRecentCommit.timestamp
+                    );
+
+                    if (fileAction) {
+                        hashLink.href = `https://github.com/{{.Org}}/{{.Name}}/commit/${fileAction.commitHash}`;
+                        hashLink.textContent = fileAction.commitHash.substring(0, 7);
+                        message.textContent = fileAction.commitMessage;
+                        author.textContent = `by ${fileAction.author}`;
+                        commitLog.style.display = 'block';
+                    }
+                }
 
                 state.nodes.forEach((node, path) => {
                     // Show node if its timestamp is less than or equal to current time
