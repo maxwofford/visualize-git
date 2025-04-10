@@ -29,7 +29,7 @@
             background: rgba(0, 0, 0, 0.7);
             padding: 10px 20px;
             border-radius: 8px;
-            display: flex;
+            display: none;
             align-items: center;
             gap: 10px;
             z-index: 1000;
@@ -54,6 +54,43 @@
             display: none;
             z-index: 1000;
         }
+        #status {
+            position: fixed;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 10px 20px;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            z-index: 1000;
+            opacity: 1;
+            transition: opacity 0.5s ease-out;
+        }
+        #status.fade-out {
+            opacity: 0;
+            pointer-events: none;
+        }
+        #status .spinner {
+            width: 20px;
+            height: 20px;
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            border-top-color: white;
+            animation: spin 1s linear infinite;
+            display: none;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        #status.queued .spinner { display: block; }
+        #status.cloning .spinner { display: block; }
+        #status.processing .spinner { display: block; }
+        #status.complete { background: rgba(40, 167, 69, 0.9); }
+        #status.error { background: rgba(220, 53, 69, 0.9); }
     </style>
 </head>
 <body>
@@ -63,6 +100,10 @@
         <div id="timestamp"></div>
     </div>
     <div id="error" class="error"></div>
+    <div id="status" class="queued">
+        <div class="spinner"></div>
+        <div class="message">Queued</div>
+    </div>
 
     <script>
         let app;
@@ -240,17 +281,48 @@
                 virtualRoot: null // Add virtual root for better organization
             };
 
-            const ws = new WebSocket('wss://' + window.location.host + '/ws/{{.RepoKey}}');
+            const ws = new WebSocket('ws://' + window.location.host + '/ws/{{.RepoKey}}');
             
             ws.onmessage = function(event) {
                 const data = JSON.parse(event.data);
                 console.log('Received data:', data);
                 
+                // Update status indicator
+                const statusEl = document.getElementById('status');
+                const statusMessage = statusEl.querySelector('.message');
+                
                 if (data.error) {
+                    statusEl.className = 'error';
+                    statusMessage.textContent = 'Error: ' + data.error;
                     const errorEl = document.getElementById('error');
                     errorEl.style.display = 'block';
                     errorEl.textContent = data.error;
                     return;
+                }
+
+                // Update status based on the status field
+                if (data.status) {
+                    statusEl.className = data.status;
+                    switch (data.status) {
+                        case 'queued':
+                            statusMessage.textContent = 'Queued';
+                            break;
+                        case 'cloning':
+                            statusMessage.textContent = 'Cloning repository...';
+                            break;
+                        case 'processing':
+                            statusMessage.textContent = 'Processing repository...';
+                            break;
+                        case 'complete':
+                            statusMessage.textContent = 'Complete';
+                            // Show controls when complete
+                            document.getElementById('controls').style.display = 'flex';
+                            // Fade out status after 2 seconds
+                            setTimeout(() => {
+                                statusEl.classList.add('fade-out');
+                            }, 2000);
+                            break;
+                    }
                 }
 
                 if (data.data) {
