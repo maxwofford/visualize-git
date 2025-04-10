@@ -141,6 +141,7 @@
 
     <script>
         let app;
+
         async function initPixi() {
             app = new PIXI.Application({
                 width: window.innerWidth,
@@ -154,6 +155,7 @@
 
             // Create main camera container
             const camera = new PIXI.Container();
+            camera.position.set(app.screen.width / 4, app.screen.height / 4);
             app.stage.addChild(camera);
 
             // Create containers for visualization
@@ -162,25 +164,19 @@
             camera.addChild(linesContainer);
             camera.addChild(nodesContainer);
 
-            // Add a center marker for debugging
+            // Add a center marker for root
             const center = new PIXI.Graphics();
             center.beginFill(0xFF0000);
             center.drawCircle(0, 0, 5);
             center.endFill();
-            center.position.set(0, 0); // Set to origin instead of screen center
+            center.position.set(0, 0);
             camera.addChild(center);
 
-            // Camera control state
             const cameraState = {
                 isDragging: false,
                 lastPosition: null,
                 zoom: 1
             };
-
-            // Initialize camera position to center of screen
-            camera.position.set(app.screen.width / 2, app.screen.height / 2);
-            nodesContainer.position.set(app.screen.width / 2, app.screen.height / 2);
-            linesContainer.position.set(app.screen.width / 2, app.screen.height / 2);
 
             // Mouse/Touch interaction setup
             app.view.addEventListener('mousedown', startDrag);
@@ -218,36 +214,14 @@
                 camera.position.x += dx;
                 camera.position.y += dy;
 
+                console.log('camera position:', { x: camera.position.x, y: camera.position.y });
+
                 cameraState.lastPosition = currentPosition;
             }
 
-            function centerOnRoot(animate = true) {
-                console.log('Centering root...');
-                console.log('Initial camera position:', { x: camera.position.x, y: camera.position.y });
-                console.log('Initial container positions:', {
-                    nodes: { x: nodesContainer.position.x, y: nodesContainer.position.y },
-                    lines: { x: linesContainer.position.x, y: linesContainer.position.y }
-                });
-
-                if (animate) {
-                    // Smoothly animate to center
-                    const dx = -camera.position.x;
-                    const dy = -camera.position.y;
-                    const distance = Math.sqrt(dx * dx + dy * dy);
-                    
-                    console.log('Animation distance:', distance);
-                    
-                    if (distance > 1) {
-                        camera.position.x += dx * 0.1;
-                        camera.position.y += dy * 0.1;
-                        console.log('New camera position:', { x: camera.position.x, y: camera.position.y });
-                        requestAnimationFrame(() => centerOnRoot(true));
-                    }
-                } else {
-                    // Instantly center
-                    camera.position.set(0, 0);
-                    console.log('Instant center - camera position:', { x: camera.position.x, y: camera.position.y });
-                }
+            function centerOnRoot() {
+                // Instantly center
+                // camera.position.set(0, 0);
 
                 // Reset zoom
                 camera.scale.set(1);
@@ -256,11 +230,6 @@
                 // Reset container positions to origin since they're children of the camera
                 nodesContainer.position.set(0, 0);
                 linesContainer.position.set(0, 0);
-                
-                console.log('Final container positions:', {
-                    nodes: { x: nodesContainer.position.x, y: nodesContainer.position.y },
-                    lines: { x: linesContainer.position.x, y: linesContainer.position.y }
-                });
             }
 
             function onKeyPress(event) {
@@ -633,8 +602,8 @@
                 const visibleNodes = Array.from(state.nodes.values())
                     .filter(node => node.sprite.alpha > 0);
 
-                const centerX = app.screen.width / 2;
-                const centerY = app.screen.height / 2;
+                const centerX = center.position.x;
+                const centerY = center.position.y;
 
                 // Reset forces for all nodes
                 visibleNodes.forEach(node => {
@@ -649,8 +618,8 @@
 
                     // Root level repulsion
                     if (node.parent === state.virtualRoot) {
-                        const dx = node.sprite.x;
-                        const dy = node.sprite.y;
+                        const dx = node.sprite.x - centerX;
+                        const dy = node.sprite.y - centerY;
                         const distSq = dx * dx + dy * dy;
                         const dist = Math.sqrt(distSq);
                         
@@ -850,9 +819,12 @@
             window.addEventListener('resize', () => {
                 app.renderer.resize(window.innerWidth, window.innerHeight);
                 
+                // Update camera position on resize
+                camera.position.set(app.screen.width / 4, app.screen.height / 4);
+                
                 // Update container positions on resize
-                nodesContainer.position.set(app.screen.width / 2, app.screen.height / 2);
-                linesContainer.position.set(app.screen.width / 2, app.screen.height / 2);
+                // nodesContainer.position.set(0, 0);
+                // linesContainer.position.set(0, 0);
                 
                 layoutTree();
             });
