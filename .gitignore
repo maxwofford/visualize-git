@@ -1,3 +1,4 @@
 outputs/*.json
 repos-cache/*
 *.prof
+tmp/*
