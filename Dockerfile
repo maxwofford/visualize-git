@@ -6,25 +6,8 @@ RUN apt-get update && \
 
 FROM golang:latest
 
-# Install git for git operations
-# Install curl for coolify health check
-# RUN apt-get install --no-install-recommends -y \
-#     curl \
-#     git \
-#     && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives
-
-# Create needed directories
 RUN mkdir -p /tools/bin /tools/lib
-
-# Copy wget & curl and their dynamic libraries
-COPY --from=tools /usr/bin/curl /tools/bin/curl
-COPY --from=tools /usr/bin/wget /tools/bin/wget
-COPY --from=tools /usr/bin/git /tools/bin/git
-# COPY --from=tools /lib /tools/lib
-# COPY --from=tools /lib64 /tools/lib64
-# COPY --from=tools /usr/lib /tools/usr-lib
-
-# Optional: Add /tools/bin to PATH
+COPY --from=tools /usr/bin/{curl,wget,git} /tools/bin/
 ENV PATH="/tools/bin:$PATH"
 
 WORKDIR /app
