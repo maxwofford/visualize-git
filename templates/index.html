@@ -285,7 +285,7 @@
                 fileActions: []
             };
 
-            const ws = new WebSocket('ws://' + window.location.host + '/ws/{{.RepoKey}}');
+            const ws = new WebSocket('wss://' + window.location.host + '/ws/{{.RepoKey}}');
             
             ws.onmessage = function(event) {
                 const data = JSON.parse(event.data);
