@@ -1,4 +1,4 @@
-FROM debian:bullseye-slim as tools
+FROM debian:bullseye-slim AS tools
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends curl wget git && \
