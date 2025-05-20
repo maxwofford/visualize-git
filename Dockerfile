@@ -7,7 +7,7 @@ RUN apt-get update && \
 FROM golang:latest
 
 RUN mkdir -p /tools/bin /tools/lib
-COPY --from=tools /usr/bin/{curl,wget,git} /tools/bin/
+COPY --from=tools /usr/bin/curl /usr/bin/wget /usr/bin/git /tools/bin/
 ENV PATH="/tools/bin:$PATH"
 
 WORKDIR /app
